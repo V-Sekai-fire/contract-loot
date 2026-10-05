@@ -1,78 +1,17 @@
-# loot
+# contract-loot
 
-The loot hexagon of the instanced loot-action core loop: a dependency-free core
-that rolls drops from a seeded weighted table and resolves first-touch contention,
-behind narrow ports, with adapters that bind the engine, the wire, and a recorded
-fixture.
+The loot core: seeded weighted drops and first-touch contention, specified in Lean and emitted as a GPU kernel that matches it bit for bit.
 
-It follows the V-Sekai `core/` + `repository/` + `adapters/` triad
-([hexagonal decision](https://v-sekai-multiplayer-fabric.github.io/manuals/decisions/20260610-hexagonal-core-ports-adapters.html))
-and the [loot hexagon decision](https://v-sekai-multiplayer-fabric.github.io/manuals/decisions/20260611-hexagon-loot-core.html).
+## What it is for
 
-## Layout
+The core is a pure reducer with no dependencies, and narrow C ports in `repository/` connect it to adapters for the engine, the wire and recorded fixtures. The roll is authored once in Lean and lowered through Slang to SPIR-V, and a parity runner checks the GPU output against golden vectors the Lean side writes. A 128-bit fixed-point multiply takes the same path and is checked against the host's C implementation. RFD 2028 owns the core, ports and adapters layout, and RFD 2045 the loot-action loop.
 
-```
-core/        Lean domain logic + lean-slang codegen (the dependency-free core)
-repository/  header-only C vtables: *_source (driving) / *_sink (driven)
-adapters/    parity (SPIR-V vs golden) and fixture (recorded vectors)
-```
+## Build and run
 
-## The core
+    cd core && lake exe loot_demo
 
-The core is a pure reducer over deterministic state
-([core contract](https://v-sekai-multiplayer-fabric.github.io/manuals/decisions/20260611-core-contract-pure-reducer-byte-state.html)):
+The `Containerfile` builds an image that runs the GPU parity check on a software renderer.
 
-- `Rng` — a 32-bit xorshift, the exact RNG the SPIR-V kernel runs.
-- `Loot` — the weighted seeded `roll`, `rollIndex`, and first-touch `resolve`.
-- `Fixed` — Q32.32 fixed point, the Lean stand-in for the host `r128`
-  ([r128 Lean library decision](https://v-sekai-multiplayer-fabric.github.io/manuals/decisions/20260612-r128-fixed-point-as-lean-library.html)).
-- `Slang` — the loot roll authored in Lean and emitted as a Slang compute kernel
-  via [lean-slang](https://github.com/V-Sekai-fire/lean-slang); `slangc -target spirv`
-  lowers it to a `.spv`
-  ([codegen decision](https://v-sekai-multiplayer-fabric.github.io/manuals/decisions/20260611-core-codegen-lean-slang.html)).
+## Licence
 
-`Main.lean` carries the Plausible properties (membership, exactly-one contention,
-first-touch) and `#guard` fixtures. `Emit.lean` writes `kernel.slang` and the
-golden vectors.
-
-```sh
-cd core
-lake exe loot_demo   # Plausible properties + the C-ABI smoke
-lake exe loot_emit   # writes build/kernel.slang and build/golden.csv
-```
-
-## SPIR-V parity
-
-The Lean spec and the Slang kernel are the same 32-bit algorithm, so the SPIR-V
-kernel reproduces the Plausible-verified outputs bit-for-bit. `adapters/parity`
-compiles `kernel.slang` to SPIR-V and dispatches it on Vulkan (via
-[volk](https://github.com/zeux/volk)), checking every output against the golden
-vectors.
-
-```sh
-# local Vulkan (lavapipe is deterministic; the RTX 4090 works too)
-cd adapters/parity && ./build.sh
-slangc kernel.slang -target spirv -profile glsl_450 -entry main -stage compute -o kernel.spv
-./parity_runner kernel.spv golden.csv      # -> PARITY PASS on 1024 seeds
-```
-
-In a podman quadlet on software Vulkan, no GPU passthrough:
-
-```sh
-podman build -t loot-parity -f Containerfile .
-podman run --rm loot-parity                # runs the parity on lavapipe
-# or install loot-parity.container as a systemd quadlet
-```
-
-CI (`.github/workflows/parity.yml`) runs the parity on lavapipe (Linux) and on
-MoltenVK (macOS).
-
-## GPU r128 parity
-
-The 32-bit placeholder is gone. `core/LootCore/R128L.lean` is the Q64.64 r128
-multiply over **uint32 limbs** (no uint64; `mulhi` via a 16-bit split), proven
-equal to the `UInt64` `R128` (Plausible + 50,000 sweep), which is proven equal to
-the host `r128.c` (8,200 vectors x 7 ops). `adapters/r128-gpu/r128_mul.slang` is **emitted from Lean** by
-`core/LootCore/R128Slang.lean` through lean-slang and lowers to SPIR-V; `adapters/r128-gpu` dispatches it on
-Vulkan via volk and checks against `r128.c`: **R128 GPU PARITY PASS on 4,096
-multiplies.** Host and GPU r128 agree bit-for-bit.
+The licence is not stated.
