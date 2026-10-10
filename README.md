@@ -14,4 +14,4 @@ The `Containerfile` builds an image that runs the GPU parity check on a software
 
 ## Licence
 
-The licence is not stated.
+MIT. See [LICENSE](LICENSE).
